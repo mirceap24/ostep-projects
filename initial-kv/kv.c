@@ -1,236 +1,202 @@
 #include <stdio.h>
-
 #include <stdlib.h>
-
 #include <string.h>
+#include <stdbool.h>
 
-#include <ctype.h>
+#define MAX_KEY 100 
+#define MAX_VALUE 1000
+#define MAX_INPUT 1100 // MAX_KEY + MAX_VALUE + COMMA
+#define FILENAME "database.txt"
 
-#include <sys/types.h>
+// structure for key-value pair 
+typedef struct {
+    int key; 
+    char value[MAX_VALUE];
+} KeyValue; 
 
-struct node {
-    int key;
-    char * value;
-    struct node * next;
-};
+// structure for database 
+typedef struct {
+    KeyValue* items; 
+    int capacity;
+    int size; 
+} Database; 
 
-// insert or update key-value pairs in linked-list
-void put(struct node ** head_ref, int key, char * value) {
-    // temporary pointer to point the head of the list
-    struct node * temp = * head_ref;
-
-    // if the list is not empty and the key of the head node 
-    // is equal to the key we're trying to insert, update 
-    // the value of the head node with the new value and return
-    if (temp != NULL && temp -> key == key) {
-        temp -> value = value;
-        return;
+// initialize database 
+Database* init_database(int initial_capacity) {
+    Database* db = malloc(sizeof(Database));
+    if (!db) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
+    db -> items = malloc(sizeof(KeyValue) * initial_capacity);
+    if (!db -> items) {
+        fprintf(stderr, "Memory allocation failed\n");
+        free(db);
+        exit(1);
     }
 
-    // traverse the list while the current node's key is not
-    // equal to the input key 
-    while (temp != NULL && temp -> key != key) {
-        temp = temp -> next;
-    }
-
-    // if the key is not found in the list, create a new node
-    // set its key, value and next pointer 
-    // then insert it at the beginning of the list
-    if (temp == NULL) {
-        struct node * newNode = (struct node * ) malloc(sizeof(struct node));
-        newNode -> key = key;
-        newNode -> value = strdup(value);
-        newNode -> next = ( * head_ref);
-        ( * head_ref) = newNode;
-        return;
-    }
-
-    // if the key is found update the value of the existing node
-    temp -> value = value;
+    db -> capacity = initial_capacity; 
+    db -> size = 0; 
+    return db;
 }
 
-// the get function takes a pointer to the head of the linked list and an integer key as its parameters
-void get(struct node * head_ref, int key) {
-    if (head_ref == NULL) {
-        printf("%d not found", key);
-        return;
-    }
-
-    struct node * ptr = head_ref;
-    // traverse the linked list until a node with a given key is found
-    while (ptr -> key != key) {
-        if (ptr -> next == NULL) {
-            printf("%d not found\n", key);
+// function to add or update key-value pair 
+void put(Database* db, int key, const char* value) {
+    // check if key exists 
+    for (int i = 0; i < db -> size; i ++) {
+        if (db -> items[i].key == key) {
+            strncpy(db -> items[i].value, value, MAX_VALUE - 1);
+            db -> items[i].value[MAX_VALUE - 1] = '\0';
             return;
         }
-        // move pointer to the next node in the list
-        ptr = ptr -> next;
     }
-    // if the node with given key is found print 
-    // the key and the corresponding value
-    printf("%d,%s\n", ptr -> key, ptr -> value);
+
+    // if key doesn't exist, add new item
+    if (db -> size >= db -> capacity) {
+        // resize database if needed 
+        db -> capacity *= 2; 
+        db -> items = realloc(db -> items, sizeof(KeyValue) * db -> capacity);
+        if (!db -> items) {
+            fprintf(stderr, "Memory reallocation failed\n");
+            exit(1);
+        }
+    }
+
+    db -> items[db -> size].key = key; 
+    strncpy(db -> items[db -> size].value, value, MAX_VALUE - 1);
+    db -> items[db -> size].value[MAX_VALUE - 1] = '\0';
+    db -> size++;
 }
 
-// search for a node with the specified key 
-// if node is found remove it from list
-void delete(struct node ** head_ref, int key) {
-    struct node * current = * head_ref;
-    struct node * prev = NULL;
+// function to get a value by key 
+const char* get(Database* db, int key) {
+    for (int i = 0; i < db -> size; i ++) {
+        if (db -> items[i].key == key) {
+            return db -> items[i].value;
+        }
+    }
+    return NULL;
+}
 
-    if (current != NULL && current -> key == key) {
-        * head_ref = current -> next;
-        free(current);
+// function to delete a key-value pair 
+bool delete(Database *db, int key) {
+    for (int i = 0; i < db -> size; i ++) {
+        if (db -> items[i].key == key) {
+            // shift all elements after the found item one posiition to the left 
+            for (int j = i; j < db -> size - 1; j ++) {
+                db -> items[j] = db -> items[j + 1];
+            }
+            db -> size--;
+            return true;
+        }
+    }
+    return false;
+}
+
+// function to clear all key-value pairs 
+void clear(Database* db) {
+    db -> size = 0;
+}
+
+// function to print all key-value pairs 
+void print_all(Database *db) {
+    for (int i = 0; i < db -> size; i ++) {
+        printf("%d, %s\n", db -> items[i].key, db -> items[i].value);
+    }
+}
+
+// free the database memory 
+void free_database(Database* db) {
+    free(db -> items);
+    free(db);
+}
+
+// function to save database to file 
+void save_to_file(Database *db) {
+    FILE* file = fopen(FILENAME, "w");
+    if (!file) {
+        fprintf(stderr, "Failed to open file for writing\n");
         return;
     }
 
-    while (current != NULL && current -> key != key) {
-        prev = current;
-        current = current -> next;
+    for (int i = 0; i < db -> size; i ++) {
+        fprintf(file, "%d,%s\n", db->items[i].key, db->items[i].value);
     }
 
-    if (current == NULL) {
+    fclose(file);
+}
+
+// function to load database from file 
+void load_from_file(Database* db) {
+    FILE* file = fopen(FILENAME, "r");
+    if (!file) {
         return;
     }
 
-    prev -> next = current -> next;
-    free(current);
+    char line[MAX_KEY + MAX_VALUE + 2]; // +2 for comma and newline 
+    while (fgets(line, sizeof(line), file)) {
+        int key;
+        char value[MAX_VALUE];
+        if (sscanf(line, "%d,%[^\n]", &key, value) == 2) {
+            put(db, key, value);
+        }
+    }
+    fclose(file);
 }
 
-void printAll(struct node * head_ref) {
-    if (head_ref == NULL)
-        return;
-
-    struct node * current = head_ref;
-    while (current != NULL) {
-        printf("%d,%s\n", current -> key, current -> value);
-        if (current -> next == NULL)
-            return;
-
-        current = current -> next;
-    }
-}
-
-// read the contents of database.txt file 
-// create a linked list using the key-value pairs from the file
-int main(int argc, char * argv[]) {
-    struct node * head = NULL;
-    FILE * fp;
-    fp = fopen("database.txt", "a+");
-
-    // declare variables to store the line read from the file, line buffer size, and line size
-
-    char * line = NULL;
-    size_t line_buf_size = 0;
-    ssize_t line_size;
-
-    // read the file line by line until the end of the file is reached 
-    while ((line_size = getline( & line, & line_buf_size, fp)) != -1) {
-        // replace the newline character at the end of the line with a null character
-        line[line_size - 1] = '\0';
-
-        // split the line using the comma delimiter to get the key 
-        char * key = strsep( & line, ",");
-        // convert the key from a string to integer 
-        int realKey = atoi(key);
-
-        // split the line again to get the value 
-        char * value = strsep( & line, ",");
-
-        put( & head, realKey, value);
-
-        // free the memory allocated for the line and set the line pointer to null
-        // getline automatically allocates a buffer for the next line by setting line to null
-        // we don't need to worry about manually managing the buffer size
-        free(line);
-        line = NULL;
-
-    }
-    free(line);
-    line = NULL;
-    fclose(fp);
-    fp = NULL;
-
+int main(int argc, char* argv[]) {
     if (argc < 2) {
-        exit(0);
+        // no arguments provided, do nothing
+        return 0;
     }
 
-    // iterate through each argument passed to the program
-    for (int i = 1; i < argc; i++) {
-        size_t len = strlen(argv[i]);
-        char * command = malloc(len * sizeof(char));
+    Database* db = init_database(10); // capacity for 10 items;
+    load_from_file(db); // load existing data
 
-        // make a copy of the current argument in the command string
-        strcpy(command, argv[i]);
+    for (int i = 1; i < argc; i ++) {
+        char* token = argv[i];
 
-        // loop through the commmand string 
-        // splitting it by ','
-        char * argument;
-        while ((argument = strsep( & command, ",")) != NULL) {
-            // if the command is 'g', get the value associated with the key
-            if (strcmp(argument, "g") == 0) {
-                char * key, * test;
-                if ((key = strsep( & command, ",")) == NULL) {
-                    printf("bad command\n");
-                    return 0;
-                }
-                if ((test = strsep( & command, ",")) != NULL) {
-                    printf("bad command\n");
-                    break;
-                }
-                int realKey = atoi(key);
-                get(head, realKey); // call the 'get' function
-            }
-            // if the command is 'p', put a new key-value pair in the linked list
-            else if (strcmp(argument, "p") == 0) {
-                char * key, * value;
-                if ((key = strsep(&command, ",")) == NULL) {
-                    printf("bad command\n");
-                    exit(0);
-                }
-                int realKey = atoi(key);
-                if (realKey == 0) {
-                    printf("bad command\n");
-                    exit(0);
-                }
-                if ((value = strsep( & command, ",")) == NULL) {
-                    printf("bad command\n");
-                    exit(0);
-                }
-                put( & head, realKey, value);
-            }
-            // If the command is 'd', delete a key-value pair using the key
-            else if (strcmp(argument, "d") == 0) {
-                char * key;
-                if ((key = strsep( & command, ",")) == NULL) {
-                    printf("bad command\n");
-                    exit(0);
-                }
-                int realKey = atoi(key);
-                delete( & head, realKey); // Call the 'delete' function to remove the key-value pair
-            }
-            // If the command is 'c', clear the entire linked list
-            else if (strcmp(argument, "c") == 0) {
-                head = NULL;
-            }
-            // If the command is 'a', print all key-value pairs
-            else if (strcmp(argument, "a") == 0) {
-                printAll(head); // Call the 'printAll' function to display all key-value pairs
+        if (token[0] == 'p' && token[1] == ',') {
+            // put command 
+            int key; 
+            char value[MAX_VALUE];
+            if (sscanf(token + 2, "%d, %[^\n]", &key, value) == 2) {
+                put(db, key, value);
+                save_to_file(db);
             } else {
-                printf("bad command\n");
+                fprintf(stderr, "Invalid put command\n");
             }
+        } else if (token[0] == 'g' && token[1] == ',') {
+            // get command
+            int key = atoi(token + 2);
+            const char* value = get(db, key);
+            if (value) {
+                printf("%d,%s\n", key, value);
+            } else {
+                printf("%d not found\n", key);
+            }
+        } else if (token[0] == 'd' && token[1] == ',') {
+            // Delete command
+            int key = atoi(token + 2);
+            if (delete(db, key)) {
+                save_to_file(db);
+                printf("Deleted %d\n", key);
+            } else {
+                printf("%d not found\n", key);
+            }
+        } else if (strcmp(token, "c") == 0) {
+            // Clear command
+            clear(db);
+            save_to_file(db);
+            printf("Cleared all key-value pairs\n");
+        } else if (strcmp(token, "a") == 0) {
+            // All command
+            print_all(db);
+        } else {
+            fprintf(stderr, "Unknown command: %s\n", token);
         }
     }
 
-    // After processing all arguments, overwrite the database file with the updated linked list
-    fp = fopen("database.txt", "w");
-    while (head != NULL) {
-        fprintf(fp, "%d,%s\n", head -> key, head -> value);
-        if (head -> next == NULL) {
-            break;
-        }
-        head = head -> next;
-    }
-    fclose(fp);
-    fp = NULL;
-
+    free_database(db);
+    return 0;
 }
