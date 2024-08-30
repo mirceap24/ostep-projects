@@ -4,162 +4,170 @@
 #include <stdbool.h>
 
 #define MAX_KEY 100 
-#define MAX_VALUE 1000
-#define MAX_INPUT 1100 // MAX_KEY + MAX_VALUE + COMMA
 #define FILENAME "database.txt"
 
-// structure for key-value pair 
+// Structure for key-value pair
 typedef struct {
     int key; 
-    char value[MAX_VALUE];
+    char* value; // Dynamic memory for value
 } KeyValue; 
 
-// structure for database 
+// Structure for database 
 typedef struct {
     KeyValue* items; 
     int capacity;
     int size; 
 } Database; 
 
-// initialize database 
+// Initialize database 
 Database* init_database(int initial_capacity) {
     Database* db = malloc(sizeof(Database));
     if (!db) {
         fprintf(stderr, "Memory allocation failed\n");
         exit(1);
     }
-    db -> items = malloc(sizeof(KeyValue) * initial_capacity);
-    if (!db -> items) {
+    db->items = malloc(sizeof(KeyValue) * initial_capacity);
+    if (!db->items) {
         fprintf(stderr, "Memory allocation failed\n");
         free(db);
         exit(1);
     }
 
-    db -> capacity = initial_capacity; 
-    db -> size = 0; 
+    db->capacity = initial_capacity; 
+    db->size = 0; 
     return db;
 }
 
-// function to add or update key-value pair 
+// Function to add or update key-value pair 
 void put(Database* db, int key, const char* value) {
-    // check if key exists 
-    for (int i = 0; i < db -> size; i ++) {
-        if (db -> items[i].key == key) {
-            strncpy(db -> items[i].value, value, MAX_VALUE - 1);
-            db -> items[i].value[MAX_VALUE - 1] = '\0';
+    // Check if key exists 
+    for (int i = 0; i < db->size; i++) {
+        if (db->items[i].key == key) {
+            free(db->items[i].value); // Free the old value
+            db->items[i].value = strdup(value); // Duplicate the new value
             return;
         }
     }
 
-    // if key doesn't exist, add new item
-    if (db -> size >= db -> capacity) {
-        // resize database if needed 
-        db -> capacity *= 2; 
-        db -> items = realloc(db -> items, sizeof(KeyValue) * db -> capacity);
-        if (!db -> items) {
+    // If key doesn't exist, add new item
+    if (db->size >= db->capacity) {
+        // Resize database if needed 
+        db->capacity *= 2; 
+        db->items = realloc(db->items, sizeof(KeyValue) * db->capacity);
+        if (!db->items) {
             fprintf(stderr, "Memory reallocation failed\n");
             exit(1);
         }
     }
 
-    db -> items[db -> size].key = key; 
-    strncpy(db -> items[db -> size].value, value, MAX_VALUE - 1);
-    db -> items[db -> size].value[MAX_VALUE - 1] = '\0';
-    db -> size++;
+    db->items[db->size].key = key; 
+    db->items[db->size].value = strdup(value); // Duplicate the value
+    db->size++;
 }
 
-// function to get a value by key 
+// Function to get a value by key 
 const char* get(Database* db, int key) {
-    for (int i = 0; i < db -> size; i ++) {
-        if (db -> items[i].key == key) {
-            return db -> items[i].value;
+    for (int i = 0; i < db->size; i++) {
+        if (db->items[i].key == key) {
+            return db->items[i].value;
         }
     }
     return NULL;
 }
 
-// function to delete a key-value pair 
-bool delete(Database *db, int key) {
-    for (int i = 0; i < db -> size; i ++) {
-        if (db -> items[i].key == key) {
-            // shift all elements after the found item one posiition to the left 
-            for (int j = i; j < db -> size - 1; j ++) {
-                db -> items[j] = db -> items[j + 1];
+// Function to delete a key-value pair 
+bool delete(Database* db, int key) {
+    for (int i = 0; i < db->size; i++) {
+        if (db->items[i].key == key) {
+            free(db->items[i].value); // Free the value
+            // Shift all elements after the found item one position to the left 
+            for (int j = i; j < db->size - 1; j++) {
+                db->items[j] = db->items[j + 1];
             }
-            db -> size--;
+            db->size--;
             return true;
         }
     }
     return false;
 }
 
-// function to clear all key-value pairs 
 void clear(Database* db) {
-    db -> size = 0;
+    for (int i = 0; i < db->size; i++) {
+        free(db->items[i].value);
+        db->items[i].value = NULL;  // Prevent dangling pointers
+    }
+    db->size = 0;
 }
-
-// function to print all key-value pairs 
-void print_all(Database *db) {
-    for (int i = 0; i < db -> size; i ++) {
-        printf("%d, %s\n", db -> items[i].key, db -> items[i].value);
+// Function to print all key-value pairs 
+void print_all(Database* db) {
+    for (int i = 0; i < db->size; i++) {
+        printf("%d,%s\n", db->items[i].key, db->items[i].value);
     }
 }
 
-// free the database memory 
 void free_database(Database* db) {
-    free(db -> items);
+    if (db == NULL) {
+        return;
+    }
+    for (int i = 0; i < db->size; i++) {
+        free(db->items[i].value);
+    }
+    free(db->items);
     free(db);
 }
 
-// function to save database to file 
-void save_to_file(Database *db) {
+// Function to save the database to a file 
+void save_to_file(Database* db) {
     FILE* file = fopen(FILENAME, "w");
     if (!file) {
         fprintf(stderr, "Failed to open file for writing\n");
         return;
     }
 
-    for (int i = 0; i < db -> size; i ++) {
+    for (int i = 0; i < db->size; i++) {
         fprintf(file, "%d,%s\n", db->items[i].key, db->items[i].value);
     }
 
     fclose(file);
 }
 
-// function to load database from file 
+// Function to load the database from a file 
 void load_from_file(Database* db) {
     FILE* file = fopen(FILENAME, "r");
     if (!file) {
         return;
     }
 
-    char line[MAX_KEY + MAX_VALUE + 2]; // +2 for comma and newline 
-    while (fgets(line, sizeof(line), file)) {
+    char* line = NULL;
+    size_t len = 0;
+    while (getline(&line, &len, file) != -1) {
         int key;
-        char value[MAX_VALUE];
+        char* value = malloc(len); // Allocate memory for the value
         if (sscanf(line, "%d,%[^\n]", &key, value) == 2) {
             put(db, key, value);
         }
+        free(value); // Free the temporary value buffer
     }
+    free(line); // Free the line buffer
     fclose(file);
 }
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        // no arguments provided, do nothing
+        // No arguments provided, do nothing
         return 0;
     }
 
-    Database* db = init_database(10); // capacity for 10 items;
-    load_from_file(db); // load existing data
+    Database* db = init_database(10); // Capacity for 10 items
+    load_from_file(db); // Load existing data
 
-    for (int i = 1; i < argc; i ++) {
+    for (int i = 1; i < argc; i++) {
         char* token = argv[i];
 
         if (token[0] == 'p' && token[1] == ',') {
-            // put command 
+            // Put command 
             int key; 
-            char value[MAX_VALUE];
+            char* value = token + 2;
             if (sscanf(token + 2, "%d, %[^\n]", &key, value) == 2) {
                 put(db, key, value);
                 save_to_file(db);
@@ -167,7 +175,7 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Invalid put command\n");
             }
         } else if (token[0] == 'g' && token[1] == ',') {
-            // get command
+            // Get command
             int key = atoi(token + 2);
             const char* value = get(db, key);
             if (value) {
