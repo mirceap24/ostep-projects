@@ -9,13 +9,18 @@
 #include "request.h"
 #include "io_helper.h"
 
+#define MAX_BUFFER_SIZE 1024
+#define MAXBUF (8192)
 
-#define MAX_BUFFER_SIZE 1024 
-
-// structure to hold buffer infor for producer-consumer 
 typedef struct {
-	int *buffer;			// array to store connection file descriptors
-	int buffer_size;				// size of buffer 
+	int conn_fd;			// connection file descriptor
+	size_t file_size; 		// size of the file to be served 
+} request_t; 
+
+// structure to hold buffer info for producer-consumer 
+typedef struct {
+	request_t *buffer; 		// array to store connection file descriptors and file sizes
+	int buffer_size;		// size of buffer 
 	int in;					// index where the next connection will be added
 	int out;				// index where the next connection will be removed
 	int count;				// current number of connections in buffer
@@ -26,11 +31,11 @@ typedef struct {
 
 char default_root[] = ".";
 buffer_t req_buffer;		// global buffer shared between the producer and consumers (workers)
-
+int schedalg = 0;			// scheduling algorithm (0 for FIFO, 1 for SFF)
 
 // function to initialize the buffer 
 void buffer_init (buffer_t *buffer, int size) {
-	buffer -> buffer = (int*)malloc(sizeof(int) * size); // allocate memory for the buffer
+	buffer -> buffer = (request_t*)malloc(sizeof(request_t) * size); // allocate memory for the buffer
 	buffer -> buffer_size = size; 	// buffer size
 	buffer -> in = 0;
 	buffer -> out = 0; 
@@ -40,23 +45,43 @@ void buffer_init (buffer_t *buffer, int size) {
 	pthread_cond_init(&buffer->empty, NULL);
 }
 
+// read request's filename 
+void read_request_filename(int conn_fd, char *filename) {
+	char buf[MAXBUF], method[MAXBUF], uri[MAXBUF], version[MAXBUF];
+	readline_or_die(conn_fd, buf, MAXBUF);
+	sscanf(buf, "%s %s %s", method, uri, version);
+	request_parse_uri(uri, filename, NULL); 
+}
+
 // function to add a connection to the buffer (producer adds an item)
 void buffer_add(buffer_t *buffer, int conn_fd) {
-	pthread_mutex_lock(&buffer -> mutex); 	// lock the buffer 
+	pthread_mutex_lock(&buffer -> mutex);
 
-	// wait until there is space in the buffer 
+	// wait until there is space in buffer 
 	while (buffer -> count == buffer -> buffer_size) {
-		pthread_cond_wait(&buffer -> full, &buffer -> mutex); // wait if the buffer is full
+		pthread_cond_wait(&buffer->full, &buffer->mutex); // wait if the buffer is full
 	}
 
-	// add the connection to the buffer at the `in` index 
-	buffer -> buffer[buffer -> in] = conn_fd; 
-	buffer -> in = (buffer -> in + 1) % buffer -> buffer_size; 	// increment `in` and wrap around if needed
+	// calculate file size for SFF 
+	size_t file_size = 0; 
+	if (schedalg == 1) {
+		char filename[MAXBUF];
+		read_request_filename(conn_fd, filename);
+		struct stat file_stat; 
+		if (stat(filename, &file_stat) == 0) {
+			file_size = file_stat.st_size;
+		}
+	}
+
+	// add the connection and file size to the buffer at the `in` index 
+	buffer -> buffer[buffer -> in].conn_fd = conn_fd;
+	buffer -> buffer[buffer -> in].file_size = file_size; 
+	buffer -> in = (buffer -> in + 1) % (buffer -> buffer_size);
 	buffer -> count++;
 
-	// signal that the buffer is not empty anymore 
-	pthread_cond_signal(&buffer -> empty);  // wake up a consumer if it is waiting for items in the buffer
-	pthread_mutex_unlock(&buffer -> mutex);	// unlock buffer
+	// signal that buffer is not empty anymore 
+	pthread_cond_signal(&buffer->empty);
+    pthread_mutex_unlock(&buffer->mutex); 
 }
 
 // function to remove a connection from buffer (consumer removes an item)
@@ -64,15 +89,41 @@ int buffer_remove(buffer_t *buffer) {
 	pthread_mutex_lock(&buffer -> mutex);
 
 	// wait until there is data in buffer 
-	while(buffer -> count == 0) {
-		pthread_cond_wait(&buffer -> empty, &buffer -> mutex); // wait if buffer is empty
-	} 
+	while (buffer -> count == 0) {
+		pthread_cond_wait(&buffer -> empty, &buffer -> mutex); // wait if buffer empty
+	}
 
-	// remove the connection from the buffer at the `out` index 
-	int conn_fd = buffer -> buffer[buffer -> out];
-	buffer -> out = (buffer -> out + 1) % buffer -> buffer_size;
-	buffer -> count --; 
+	int selected_index = buffer -> out; // FIFO by default 
 
+	if (schedalg == 1) { // SFF
+		// find index of the request with the smallest file size
+		size_t smallest_size = buffer -> buffer[buffer -> out].file_size;
+		for (int i = 1; i < buffer -> count; i ++) {
+			int index = (buffer -> out + i) % buffer -> buffer_size;
+			if (buffer -> buffer[index].file_size < smallest_size) {
+				smallest_size = buffer -> buffer[index].file_size; 
+				selected_index = index;
+			}
+		}
+	}
+
+	// remove connection from the buffer 
+	int conn_fd = buffer -> buffer[selected_index].conn_fd;
+
+	// adjust the buffer if we are not removing the front 
+	if (selected_index != buffer -> out) {
+		// shift all elements to fill the gap left by the removed element 
+		for (int i = selected_index; i != buffer -> in; i = (i + 1) % buffer -> buffer_size) {
+			int next_index = (i + 1) % buffer -> buffer_size;
+			buffer -> buffer[i] = buffer -> buffer[next_index];
+		}
+		buffer -> in = (buffer -> in + buffer -> buffer_size - 1) % buffer -> buffer_size;
+	}
+
+	buffer -> out = (buffer->out + 1) % buffer->buffer_size;
+	buffer -> count--;
+
+	// signal that buffer is not full anymore 
 	pthread_cond_signal(&buffer -> full);
 	pthread_mutex_unlock(&buffer -> mutex);
 
@@ -97,7 +148,7 @@ int main(int argc, char *argv[]) {
     int buffer_size = 1;                                  // Default buffer size
 
     // Parse command-line arguments
-    while ((c = getopt(argc, argv, "d:p:t:b:")) != -1) {
+    while ((c = getopt(argc, argv, "d:p:t:b:s")) != -1) {
         switch (c) {
         case 'd':
             root_dir = optarg;                            // Set the root directory
@@ -111,6 +162,13 @@ int main(int argc, char *argv[]) {
         case 'b':
             buffer_size = atoi(optarg);                   // Set the buffer size
             break;
+		case 's':
+			if (strcmp(optarg, "SFF") == 0) {
+				schedalg = 1;
+			} else {
+				schedalg = 0;
+			}
+			break;
         default:
             fprintf(stderr, "usage: wserver [-d basedir] [-p port] [-t threads] [-b buffers]\n");
             exit(1);
@@ -147,6 +205,3 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
-
- 
