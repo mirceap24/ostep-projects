@@ -56,6 +56,12 @@ void request_read_headers(int fd) {
 //
 int request_parse_uri(char *uri, char *filename, char *cgiargs) {
     char *ptr;
+
+    // Check for directory traversal attempts
+    if (strstr(uri, "..") != NULL) {
+        // Reject the request if it contains ".."
+        return -1;
+    }
     
     if (!strstr(uri, "cgi")) { 
 	// static
@@ -159,6 +165,10 @@ void request_handle(int fd) {
     request_read_headers(fd);
     
     is_static = request_parse_uri(uri, filename, cgiargs);
+    if (is_static == -1) {
+        request_error(fd, filename, "403", "Forbidden", "server detected a directory traversal attempt");
+        return;
+    }
     if (stat(filename, &sbuf) < 0) {
 	request_error(fd, filename, "404", "Not found", "server could not find this file");
 	return;
